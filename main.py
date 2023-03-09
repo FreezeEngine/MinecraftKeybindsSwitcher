@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import Button, Label
 from tkinter import ttk
 from ctypes import *
+from uwp import get_minecraft_version
 
 
 class Memory:
@@ -120,55 +121,67 @@ class KeybindsChanger:
                 self.start_process_search()
                 break
 
-    def load_pointer_map(self, filename='memory_map_1.19.31.json'):
-        with open(f'memory_maps/{filename}') as file:
-            data = json.load(file)
-            base_struct = data['BaseAddress'].split('+')
-            self.module_name = base_struct[0]
-            # Find process
-            rwm = ReadWriteMemory()
-            while True:
-                try:
-                    process = rwm.get_process_by_name(self.module_name)
-                    process.open()
-                    break
-                except ReadWriteMemoryError:
-                    sleep(3)
-                    pass
-            self.status_label['text'] = "Attached to Minecraft"
-            self.searching_for_process = False
-            self.process = process
-            self.memory = Memory(process)
-            # Load modules
-            for handle in win32process.EnumProcessModules(self.process.handle):
-                module_base = handle  # base addr
-                module_name = os.path.basename(win32process.GetModuleFileNameEx(self.process.handle, handle))  # name
-                print({module_name: module_base})
-                if module_name == self.module_name:
-                    self.module_base = module_base
-                    break
-            if not self.module_base:
-                print('FAILED TO FIND MODULE')
-                return
-            # Calculate base
-            self.pointers_offset = int(base_struct[1], 16)
-            self.pointer_map = []
-            start_pointer_address = self.module_base + self.pointers_offset
-            # read pointers
-            slots = ['Slot1', 'Slot2', 'Slot3', 'Slot4', 'Slot5', 'Slot6', 'Slot7', 'Slot8', 'Slot9']
-            for slot in slots:
-                offsets_obj = []
-                offsets = data[slot].split(',')
-                for offset in offsets:
-                    offsets_obj.append(int(offset, 16))
-                    while True: # inf loop if mc version is diff
-                        try:
-                            pointer = self.memory.get_pointer(start_pointer_address, offsets=offsets_obj)
-                            break
-                        except:
-                            sleep(5)
-                self.pointer_map.append(pointer)
-            threading.Thread(target=self.realtime_values_update, daemon=True).start()
+    def load_pointer_map(self, filename=None):
+        filename = f'memory_map_{get_minecraft_version()}.json'
+        try:
+            with open(f'memory_maps/{filename}') as file:
+                data = json.load(file)
+                base_struct = data['BaseAddress'].split('+')
+                self.module_name = base_struct[0]
+                # Find process
+                rwm = ReadWriteMemory()
+                while True:
+                    try:
+                        process = rwm.get_process_by_name(self.module_name)
+                        process.open()
+                        break
+                    except ReadWriteMemoryError:
+                        sleep(3)
+                        pass
+                self.status_label['text'] = "Attached to Minecraft"
+                self.searching_for_process = False
+                self.process = process
+                self.memory = Memory(process)
+                # Load modules
+                for handle in win32process.EnumProcessModules(self.process.handle):
+                    module_base = handle  # base addr
+                    module_name = os.path.basename(
+                        win32process.GetModuleFileNameEx(self.process.handle, handle))  # name
+                    print({module_name: module_base})
+                    if module_name == self.module_name:
+                        self.module_base = module_base
+                        break
+                if not self.module_base:
+                    print('FAILED TO FIND MODULE')
+                    return
+                # Calculate base
+                self.pointers_offset = int(base_struct[1], 16)
+                self.pointer_map = []
+                start_pointer_address = self.module_base + self.pointers_offset
+                # read pointers
+                slots = ['Slot1', 'Slot2', 'Slot3', 'Slot4', 'Slot5', 'Slot6', 'Slot7', 'Slot8', 'Slot9']
+                for slot in slots:
+                    offsets_obj = []
+                    offsets = data[slot].split(',')
+                    for offset in offsets:
+                        offsets_obj.append(int(offset, 16))
+                        errors = 0
+                        error_limit = 4
+                        while True:  # inf loop if mc version is diff
+                            try:
+                                errors += 1
+                                pointer = self.memory.get_pointer(start_pointer_address, offsets=offsets_obj)
+                                break
+                            except:
+                                if errors == error_limit:
+                                    print('Failed to load pointers, restart required.')
+                                    return
+                                sleep(5)
+                    self.pointer_map.append(pointer)
+                threading.Thread(target=self.realtime_values_update, daemon=True).start()
+        except FileNotFoundError:
+            print('Version not supported!')
+            self.status_label['text'] = "Unsupported version!"
 
 
 if __name__ == '__main__':
