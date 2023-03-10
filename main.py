@@ -16,6 +16,20 @@ class Memory:
     def __init__(self, process):
         self.process = process
 
+    def write(self, address, data, buffer_size=4):
+        try:
+            count = c_ulong(0)
+            c_int(0)
+            if not windll.kernel32.WriteProcessMemory(self.process.handle, address, byref(data), buffer_size,
+                                                      byref(count)):
+                print("Failed: Write Memory - Error Code: ", FormatError(windll.kernel32.GetLastError()))
+                windll.kernel32.SetLastError(10000)
+            else:
+                return False
+        except (BufferError, ValueError, TypeError) as error:
+            print("Failed: Read Memory #2 - Error Code: ", windll.kernel32.GetLastError())
+            return False
+
     def read(self, address, buffer_size=4):
         try:
             buf = create_string_buffer(buffer_size)
@@ -52,6 +66,7 @@ class KeybindsChanger:
 
         self.process = None
         self.use_gui = use_gui
+        self.selected_profile = None
 
         self.profiles_list = {'values': []}
         self.status_label = {'text': ''}
@@ -61,6 +76,8 @@ class KeybindsChanger:
         self.start_process_search()
 
         self.buttons = []
+
+        self.profiles = {}
 
         if use_gui:
             self.init_gui()
@@ -76,21 +93,25 @@ class KeybindsChanger:
 
         Label(window, text='Profile:').grid(row=2, column=1, pady=5, sticky='e')
 
-        selected_profile = tk.StringVar()
-        self.profiles_list = ttk.Combobox(window, width=27, textvariable=selected_profile)
-        self.profiles_list['values'] = ['Bridge', 'CTF', 'EggWars']
+        self.selected_profile = tk.StringVar()
+        self.profiles_list = ttk.Combobox(window, width=27, textvariable=self.selected_profile)
+        self.load_profiles()
         self.profiles_list.grid(row=2, column=2, pady=5)
 
         Button(window, text='SAVE CURRENT', width=38).grid(row=4, column=1, columnspan=2, pady=5)
-        Button(window, text='DELETE SELECTED', width=38).grid(row=5, column=1, columnspan=2)
-        apply_btn_id = 0
+        Button(window, text='APPLY', width=38, command=self.apply_profile).grid(row=5, column=1,
+                                                                                columnspan=2)
+        delete_btn_id = 0
         for slot_id in range(9):
             slot = Label(window, text=f'SLOT {slot_id + 1}: X', font=1)
             slot.grid(row=6 + slot_id, column=1, columnspan=2, pady=5)
             self.buttons.append(slot)
-            apply_btn_id = slot_id + 7
+            delete_btn_id = slot_id + 7
 
-        Button(window, text='APPLY', width=38).grid(row=apply_btn_id, column=1, columnspan=2, pady=14)
+        Button(window, text='DELETE SELECTED', width=38, command=self.delete_current_profile).grid(row=delete_btn_id,
+                                                                                                   column=1,
+                                                                                                   columnspan=2,
+                                                                                                   pady=14)
 
         window.mainloop()
 
@@ -100,8 +121,44 @@ class KeybindsChanger:
         self.searching_for_process = True
         threading.Thread(target=self.load_pointer_map, daemon=True).start()
 
-    def attach_and_load(self):
+    def load_profiles(self):
+        for file in os.listdir('./profiles'):
+            filename = os.fsdecode(file)
+            if filename.endswith(".json"):
+                with open(f'./profiles/{filename}') as profile_file:
+                    data = json.load(profile_file)
+                    self.profiles.update({filename: data})
+                    self.profiles_list['values'] = [x['Name'] for x in self.profiles.values()]
+                continue
+            else:
+                continue
+
+    def save_current_as_profile(self):
         pass
+
+    def get_current_profile(self):
+        return [(x, y) for x, y in zip(self.profiles.values(),
+                                       self.profiles.items()) if x['Name'] == self.selected_profile.get()][0]
+
+    def delete_current_profile(self):
+        try:
+            file_to_delete = self.get_current_profile()[1][0]
+            path = f'./profiles/{file_to_delete}'
+            os.remove(path)
+            self.selected_profile.set('')
+            self.load_profiles()
+        except (IndexError, KeyError, FileNotFoundError):
+            print('DELETE ERROR')
+
+    def apply_profile(self):
+        try:
+            current_profile = self.get_current_profile()[0]
+            current_profile = list(current_profile.values())[1:]
+            for slot_id in range(9):
+                self.memory.write(self.pointer_map[slot_id], c_int32(current_profile[slot_id]), 4)
+            self.update_values()
+        except (IndexError, KeyError):
+            print('APPLY ERROR')
 
     def update_values(self):
         if not self.use_gui:
@@ -121,7 +178,7 @@ class KeybindsChanger:
                 self.start_process_search()
                 break
 
-    def load_pointer_map(self, filename=None):
+    def load_pointer_map(self):
         filename = f'memory_map_{get_minecraft_version()}.json'
         try:
             with open(f'memory_maps/{filename}') as file:
@@ -147,7 +204,7 @@ class KeybindsChanger:
                     module_base = handle  # base addr
                     module_name = os.path.basename(
                         win32process.GetModuleFileNameEx(self.process.handle, handle))  # name
-                    print({module_name: module_base})
+                    # print({module_name: module_base})
                     if module_name == self.module_name:
                         self.module_base = module_base
                         break
@@ -159,10 +216,10 @@ class KeybindsChanger:
                 self.pointer_map = []
                 start_pointer_address = self.module_base + self.pointers_offset
                 # read pointers
-                slots = ['Slot1', 'Slot2', 'Slot3', 'Slot4', 'Slot5', 'Slot6', 'Slot7', 'Slot8', 'Slot9']
-                for slot in slots:
+                data = list(data.values())[1:]
+                for slot_id in range(9):
                     offsets_obj = []
-                    offsets = data[slot].split(',')
+                    offsets = data[slot_id].split(',')
                     for offset in offsets:
                         offsets_obj.append(int(offset, 16))
                         errors = 0
