@@ -12,6 +12,7 @@ from ctypes import *
 from uwp import get_minecraft_version
 
 
+# Based on https://github.com/randomdavis/process_interface.py/blob/main/process_interface.py
 class Memory:
     def __init__(self, process):
         self.process = process
@@ -98,7 +99,8 @@ class KeybindsChanger:
         self.load_profiles()
         self.profiles_list.grid(row=2, column=2, pady=5)
 
-        Button(window, text='SAVE CURRENT', width=38).grid(row=4, column=1, columnspan=2, pady=5)
+        Button(window, text='SAVE CURRENT', width=38, command=self.save_current_as_profile).grid(row=4, column=1,
+                                                                                                 columnspan=2, pady=5)
         Button(window, text='APPLY', width=38, command=self.apply_profile).grid(row=5, column=1,
                                                                                 columnspan=2)
         delete_btn_id = 0
@@ -112,7 +114,6 @@ class KeybindsChanger:
                                                                                                    column=1,
                                                                                                    columnspan=2,
                                                                                                    pady=14)
-
         window.mainloop()
 
     def start_process_search(self):
@@ -122,6 +123,7 @@ class KeybindsChanger:
         threading.Thread(target=self.load_pointer_map, daemon=True).start()
 
     def load_profiles(self):
+        self.profiles = {}
         for file in os.listdir('./profiles'):
             filename = os.fsdecode(file)
             if filename.endswith(".json"):
@@ -134,14 +136,31 @@ class KeybindsChanger:
                 continue
 
     def save_current_as_profile(self):
-        pass
+        name = self.selected_profile.get()
+        if not name:
+            return
+        profile = {'Name': name}
+        filename = name.lower()
+        for slot_id in range(9):
+            slot = int(c_int32.from_buffer(self.memory.read(self.pointer_map[slot_id], 4)).value)
+            profile.update({f'Slot{slot_id + 1}': slot})
+        with open(f'./profiles/{filename}.json', 'w', encoding='utf-8') as f:
+            json.dump(profile, f, ensure_ascii=False, indent=4)
+        self.load_profiles()
 
     def get_current_profile(self):
-        return [(x, y) for x, y in zip(self.profiles.values(),
-                                       self.profiles.items()) if x['Name'] == self.selected_profile.get()][0]
+        try:
+            return [(x, y) for x, y in zip(self.profiles.values(),
+                                           self.profiles.items()) if x['Name'] == self.selected_profile.get()][0]
+        except (IndexError, KeyError):
+            return False
 
     def delete_current_profile(self):
         try:
+            profile = self.get_current_profile()
+            if not profile:
+                print('NO PROFILE SELECTED')
+                return
             file_to_delete = self.get_current_profile()[1][0]
             path = f'./profiles/{file_to_delete}'
             os.remove(path)
@@ -163,10 +182,21 @@ class KeybindsChanger:
     def update_values(self):
         if not self.use_gui:
             return
+        profile = self.get_current_profile()
+        current_profile = None
+        if profile:
+            current_profile = self.get_current_profile()[0]
+            current_profile = list(current_profile.values())[1:]
         for slot_id in range(9):
             slot = int(c_int32.from_buffer(self.memory.read(self.pointer_map[slot_id], 4)).value)
             btn = f'MB{slot + 100}' if slot < 0 else chr(slot)
-            self.buttons[slot_id]['text'] = f'SLOT {slot_id + 1}: {btn}'
+            to_btn = ''
+            if current_profile:
+                to_slot = current_profile[slot_id]
+                if to_slot != slot:
+                    to_btn = ' => ' + (f'MB{to_slot + 100}' if to_slot < 0 else chr(to_slot))
+
+            self.buttons[slot_id]['text'] = f'SLOT {slot_id + 1}: {btn}{to_btn}'
 
     def realtime_values_update(self):
         while True:
@@ -224,7 +254,7 @@ class KeybindsChanger:
                         offsets_obj.append(int(offset, 16))
                         errors = 0
                         error_limit = 4
-                        while True:  # inf loop if mc version is diff
+                        while True:
                             try:
                                 errors += 1
                                 pointer = self.memory.get_pointer(start_pointer_address, offsets=offsets_obj)
