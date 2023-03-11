@@ -1,7 +1,7 @@
 import json
 import os
 from typing import List
-import win32process
+from psapi import EnumProcessModulesEx, GetModuleFileNameEx
 from ReadWriteMemory import ReadWriteMemory, ReadWriteMemoryError
 from time import sleep
 import threading
@@ -58,6 +58,7 @@ class Memory:
 
 class KeybindsChanger:
     def __init__(self, use_gui=True):
+        self.prepare_dirs()
         self.module_name = None
         self.module_base = None
         self.pointers_offset = None
@@ -122,8 +123,15 @@ class KeybindsChanger:
         self.searching_for_process = True
         threading.Thread(target=self.load_pointer_map, daemon=True).start()
 
+    def prepare_dirs(self):
+        if not os.path.exists(f'./memory_maps'):
+            os.mkdir('./memory_maps')
+        if not os.path.exists('./profiles'):
+            os.mkdir('./profiles')
+
     def load_profiles(self):
         self.profiles = {}
+
         for file in os.listdir('./profiles'):
             filename = os.fsdecode(file)
             if filename.endswith(".json"):
@@ -211,7 +219,7 @@ class KeybindsChanger:
     def load_pointer_map(self):
         filename = f'memory_map_{get_minecraft_version()}.json'
         try:
-            with open(f'memory_maps/{filename}') as file:
+            with open(f'./memory_maps/{filename}') as file:
                 data = json.load(file)
                 base_struct = data['BaseAddress'].split('+')
                 self.module_name = base_struct[0]
@@ -230,10 +238,10 @@ class KeybindsChanger:
                 self.process = process
                 self.memory = Memory(process)
                 # Load modules
-                for handle in win32process.EnumProcessModules(self.process.handle):
-                    module_base = handle  # base addr
+                for handle in EnumProcessModulesEx(self.process.handle):
+                    module_base = int(handle.value)  # base addr
                     module_name = os.path.basename(
-                        win32process.GetModuleFileNameEx(self.process.handle, handle))  # name
+                        GetModuleFileNameEx(self.process.handle, handle))  # name
                     # print({module_name: module_base})
                     if module_name == self.module_name:
                         self.module_base = module_base
