@@ -47,3 +47,5 @@ def get_minecraft_version():
 
     for app in packages:
         return app.application.version
+
+# print(get_minecraft_version())
